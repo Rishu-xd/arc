@@ -15,7 +15,16 @@ import {
 
 type ChatDockData = {
   isLoading: boolean;
-  onSubmit: (prompt: string) => Promise<void>;
+  selectedContext?: SelectedNodeContext;
+  onSubmit: (prompt: string, context?: SelectedNodeContext) => Promise<void>;
+  onClearContext: () => void;
+};
+
+type SelectedNodeContext = {
+  nodeId: string;
+  nodeType: "response" | "image" | "workflowStep";
+  label: string;
+  details: string;
 };
 
 type ChatMessage = {
@@ -36,6 +45,11 @@ type ResponseData = {
   imageError?: string;
 };
 
+type WorkflowStepData = {
+  label: string;
+  status: "pending" | "active" | "done" | "error";
+};
+
 type ImageAsset = {
   thumbnailUrl: string;
   sourceUrl: string;
@@ -47,7 +61,7 @@ type ImageAsset = {
 };
 
 type ImageNodeData = { image: ImageAsset };
-type CanvasNodeData = ChatDockData | ResponseData | ImageNodeData;
+type CanvasNodeData = ChatDockData | ResponseData | ImageNodeData | WorkflowStepData;
 type CanvasNode = Node<CanvasNodeData>;
 
 const DOCK_HEIGHT = 132;
@@ -57,19 +71,64 @@ const RESPONSE_EXPANDED_HEIGHT = 360;
 const IMAGE_WIDTH = 220;
 const IMAGE_HEIGHT = 132;
 const IMAGE_GAP = 12;
+const WORKFLOW_STEP_HEIGHT = 48;
 
 function getDockWidth(canvasWidth: number) {
   return Math.max(200, Math.min(560, canvasWidth - 32));
 }
 
-function getDockPosition(width: number, height: number, submitted: boolean) {
+function getNodeContext(node: CanvasNode): SelectedNodeContext | undefined {
+  if ("image" in node.data) {
+    const image = node.data.image;
+    return {
+      nodeId: node.id,
+      nodeType: "image",
+      label: image.title,
+      details: [
+        `Image title: ${image.title}`,
+        `Artist: ${image.artist}`,
+        `License: ${image.license}`,
+        `Dimensions: ${image.width}×${image.height}`,
+        `Thumbnail URL: ${image.thumbnailUrl}`,
+        `Wikimedia Commons page: ${image.sourceUrl}`,
+      ].join("\n"),
+    };
+  }
+  if ("label" in node.data) {
+    return {
+      nodeId: node.id,
+      nodeType: "workflowStep",
+      label: node.data.label,
+      details: `Workflow step: ${node.data.label}\nCurrent status: ${node.data.status}`,
+    };
+  }
+  if ("prompt" in node.data) {
+    const response = node.data.response || "No response has been generated yet.";
+    return {
+      nodeId: node.id,
+      nodeType: "response",
+      label: "Arc response",
+      details: [
+        `Original request: ${node.data.prompt}`,
+        `Response status: ${node.data.status}`,
+        `Response: ${response}`,
+        `Images attached: ${node.data.images.length}`,
+        ...node.data.images.map(
+          (image, index) =>
+            `Image ${index + 1}: ${image.title}; artist: ${image.artist}; license: ${image.license}; source: ${image.sourceUrl}`,
+        ),
+      ].join("\n"),
+    };
+  }
+  return undefined;
+}
+
+function getDockPosition(width: number, height: number) {
   const dockWidth = getDockWidth(width);
 
   return {
     x: Math.max(16, (width - dockWidth) / 2),
-    y: submitted
-      ? Math.max(16, height - DOCK_HEIGHT - 28)
-      : Math.max(16, (height - DOCK_HEIGHT) / 2),
+    y: Math.max(16, height - DOCK_HEIGHT - 28),
   };
 }
 
@@ -79,7 +138,7 @@ function getImageLayout(
   imageCount: number,
   responseHeight = RESPONSE_HEIGHT,
 ) {
-  const dockPosition = getDockPosition(width, height, true);
+  const dockPosition = getDockPosition(width, height);
   const columns = Math.max(1, Math.min(imageCount, width >= 960 ? 4 : width >= 760 ? 3 : 2));
   const imageWidth = Math.max(
     120,
@@ -105,6 +164,29 @@ function getImageLayout(
       y: imageTop + Math.floor(index / columns) * (IMAGE_HEIGHT + IMAGE_GAP),
     })),
   };
+}
+
+function getResponsePosition(width: number, height: number, responseHeight: number) {
+  const responseWidth = Math.min(RESPONSE_WIDTH, width - 32);
+  return {
+    x: Math.max(16, (width - responseWidth) / 2),
+    y: Math.max(16, (height - responseHeight) / 2),
+  };
+}
+
+function getWorkflowStepPositions(width: number, height: number, responseHeight: number) {
+  const gap = 10;
+  const stepWidth = Math.max(140, width - 32);
+  const responsePosition = getResponsePosition(width, height, responseHeight);
+  const top = Math.max(
+    12,
+    responsePosition.y - 12 - 3 * WORKFLOW_STEP_HEIGHT - 2 * gap,
+  );
+
+  return Array.from({ length: 3 }, (_, index) => ({
+    x: Math.max(16, (width - stepWidth) / 2),
+    y: top + index * (WORKFLOW_STEP_HEIGHT + gap),
+  }));
 }
 
 function isImageAsset(value: unknown): value is ImageAsset {
@@ -146,25 +228,40 @@ function ChatDockNodeView({ data }: NodeProps<CanvasNode>) {
   const submit = () => {
     const value = prompt.trim();
     if (!value || data.isLoading) return;
-    void data.onSubmit(value);
+    void data.onSubmit(value, data.selectedContext);
     setPrompt("");
   };
 
   return (
     <form
-      className="flex h-[132px] w-full flex-col justify-between rounded-2xl border border-[#343540] bg-[#191a22] p-4 shadow-[0_12px_40px_rgb(0_0_0_/_35%)]"
+      className="flex h-[132px] w-full flex-col justify-between rounded-2xl border border-[#343540] bg-[#191a22] p-3 shadow-[0_12px_40px_rgb(0_0_0_/_35%)]"
       onSubmit={(event) => {
         event.preventDefault();
         submit();
       }}
     >
       <label className="text-[11px] font-medium text-[#aaa9b5]" htmlFor="canvas-prompt">
-        {data.isLoading ? "Local model is thinking..." : "What would you like to create?"}
+        {data.isLoading ? "Arc is thinking..." : "What would you like to create?"}
       </label>
+      {data.selectedContext && (
+        <div className="flex min-h-5 items-center gap-1.5 text-[9px] text-[#b5a1ff]">
+          <span className="max-w-[90%] truncate rounded bg-[#2a2440] px-1.5 py-0.5">
+            Asking about: {data.selectedContext.label}
+          </span>
+          <button
+            aria-label="Clear selected node context"
+            className="nodrag shrink-0 rounded px-1 text-[#aaa9b5] hover:bg-[#252630] hover:text-white"
+            onClick={data.onClearContext}
+            type="button"
+          >
+            ×
+          </button>
+        </div>
+      )}
       <textarea
         id="canvas-prompt"
         aria-label="Describe what you want to create"
-        className="nodrag nopan h-10 w-full resize-none border-0 bg-transparent p-0 text-sm leading-5 text-[#f0eff5] outline-none placeholder:text-[#777683]"
+        className="nodrag nopan h-8 w-full resize-none border-0 bg-transparent p-0 text-sm leading-5 text-[#f0eff5] outline-none placeholder:text-[#777683]"
         onChange={(event) => setPrompt(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.shiftKey) {
@@ -200,9 +297,15 @@ function ResponseNodeView({ data }: NodeProps<CanvasNode>) {
 
   return (
     <article className="flex h-full w-full flex-col gap-2 rounded-2xl border border-[#30313b] bg-[#181920] p-3 shadow-[0_8px_30px_rgb(0_0_0_/_25%)]">
+      <Handle
+        className="!top-[-5px] !h-[9px] !w-[9px] !border-2 !border-[#181920] !bg-[#a18de9]"
+        id="workflow-input"
+        position={Position.Top}
+        type="target"
+      />
       <div className="flex items-center gap-2">
         <span className="grid h-6 w-6 place-items-center rounded-lg bg-[#2a2440] text-xs text-[#b5a1ff]">a</span>
-        <span className="text-[11px] font-semibold text-[#dfdee7]">Local model</span>
+        <span className="text-[11px] font-semibold text-[#dfdee7]">Arc</span>
         {data.status === "loading" && <span className="text-[10px] text-[#777683]">Thinking…</span>}
       </div>
       <div className={`min-h-0 flex-1 ${data.isExpanded ? "overflow-y-auto" : "overflow-hidden"}`}>
@@ -250,6 +353,38 @@ function ResponseNodeView({ data }: NodeProps<CanvasNode>) {
       </div>
       <PositionHandle />
     </article>
+  );
+}
+
+function WorkflowStepNodeView({ data }: NodeProps<CanvasNode>) {
+  if (!("label" in data)) return null;
+
+  const statusStyle = {
+    pending: "border-[#343540] text-[#777683]",
+    active: "border-[#765bd8] bg-[#221c35] text-[#c5b7ff]",
+    done: "border-[#365b49] bg-[#19251f] text-[#9bd4b0]",
+    error: "border-[#704343] bg-[#2a1b1b] text-[#f19a9a]",
+  }[data.status];
+
+  return (
+    <div className={`flex h-full w-full items-center gap-2 rounded-xl border bg-[#181920] px-3 shadow-[0_8px_24px_rgb(0_0_0_/_20%)] ${statusStyle}`}>
+      <Handle
+        className="!top-[-5px] !h-[9px] !w-[9px] !border-2 !border-[#181920] !bg-[#a18de9]"
+        id="workflow-input"
+        position={Position.Top}
+        type="target"
+      />
+      <Handle
+        className="!bottom-[-5px] !top-auto !h-[9px] !w-[9px] !border-2 !border-[#181920] !bg-[#a18de9]"
+        id="workflow-output"
+        position={Position.Bottom}
+        type="source"
+      />
+      <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-black/20 text-[10px]">
+        {data.status === "done" ? "✓" : data.status === "active" ? "…" : data.status === "error" ? "!" : "·"}
+      </span>
+      <span className="truncate text-[10px] font-medium">{data.label}</span>
+    </div>
   );
 }
 
@@ -313,7 +448,7 @@ function ChatHistoryDialog({
                 key={`${message.role}-${index}`}
               >
                 <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-[#aaa9b5]">
-                  {message.role === "user" ? "You" : "Local model"}
+                  {message.role === "user" ? "You" : "Arc"}
                 </p>
                 <p className="m-0 whitespace-pre-wrap break-words text-xs leading-5 text-[#d7d6df]">
                   {message.content}
@@ -383,6 +518,7 @@ const nodeTypes = {
   chatDock: ChatDockNodeView,
   response: ResponseNodeView,
   image: ImageNodeView,
+  workflowStep: WorkflowStepNodeView,
 };
 
 const navigation = [
@@ -399,10 +535,18 @@ export default function Home() {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
   const canvasSize = useRef({ width: 0, height: 0 });
-  const submitted = useRef(false);
   const chatHistoryRef = useRef<ChatMessage[]>([]);
 
   const showHistory = useCallback(() => setIsHistoryOpen(true), []);
+  const updateSelectedNodeContext = useCallback((context?: SelectedNodeContext) => {
+    setNodes((currentNodes) =>
+      currentNodes.map((node) =>
+        node.id === "chat-dock" && "onSubmit" in node.data
+          ? { ...node, data: { ...node.data, selectedContext: context } }
+          : node,
+      ),
+    );
+  }, [setNodes]);
 
   const toggleResponseExpanded = useCallback(() => {
     const { width, height } = canvasSize.current;
@@ -420,12 +564,13 @@ export default function Home() {
           node.type === "image" && "image" in node.data,
       );
       const layout = getImageLayout(width, height, imageNodes.length, responseHeight);
+      const responsePosition = getResponsePosition(width, height, responseHeight);
 
       return currentNodes.map((node) => {
         if (node.id === "assistant-response") {
           return {
             ...node,
-            position: layout.response,
+            position: responsePosition,
             style: { width: Math.min(RESPONSE_WIDTH, width - 32), height: responseHeight },
             data: { ...responseNode.data, isExpanded },
           };
@@ -433,23 +578,30 @@ export default function Home() {
         if (node.type === "image") {
           const index = imageNodes.findIndex((imageNode) => imageNode.id === node.id);
           const position = layout.images[index];
-          return position ? { ...node, position } : node;
+          return position
+            ? {
+                ...node,
+                position: {
+                  ...position,
+                  y: position.y + responsePosition.y - layout.response.y,
+                },
+              }
+            : node;
         }
         return node;
       });
     });
   }, [setNodes]);
 
-  const handleSubmit = useCallback(async (prompt: string) => {
+  const handleSubmit = useCallback(async (prompt: string, context?: SelectedNodeContext) => {
     const { width, height } = canvasSize.current;
-    const dockPosition = getDockPosition(width, height, true);
-    const layout = getImageLayout(width, height, 0);
+    const dockPosition = getDockPosition(width, height);
     const responseWidth = Math.min(RESPONSE_WIDTH, width - 32);
     const historyCount = chatHistoryRef.current.length;
     const response: CanvasNode = {
       id: "assistant-response",
       type: "response",
-      position: layout.response,
+      position: getResponsePosition(width, height, RESPONSE_HEIGHT),
       style: { width: responseWidth, height: RESPONSE_HEIGHT },
       data: {
         prompt,
@@ -462,8 +614,14 @@ export default function Home() {
         onShowHistory: showHistory,
       },
     };
+    const workflowLabels = [
+      "Search provided URL",
+      "Extract readable HTML",
+      "Analyze page and answer",
+    ];
+    let activeStepIndex = -1;
+    let hasWorkflowSteps = false;
 
-    submitted.current = true;
     setNodes((currentNodes) => [
       ...currentNodes
         .filter((node) => node.id === "chat-dock")
@@ -483,9 +641,160 @@ export default function Home() {
       const apiResponse = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt, history: chatHistoryRef.current.slice(-20) }),
+        body: JSON.stringify({
+          prompt,
+          history: chatHistoryRef.current.slice(-20),
+          selectedNode: context,
+        }),
       });
-      const result: unknown = await apiResponse.json();
+      if (!apiResponse.ok) {
+        const errorResult: unknown = await apiResponse.json();
+        throw new Error(
+          typeof errorResult === "object" &&
+          errorResult !== null &&
+          "error" in errorResult &&
+          typeof errorResult.error === "string"
+            ? errorResult.error
+            : "The assistant could not complete that request. Please try again.",
+        );
+      }
+      if (!apiResponse.body) {
+        throw new Error("The assistant returned an empty response. Please try again.");
+      }
+
+      let result: unknown;
+      const reader = apiResponse.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const processEvent = (line: string) => {
+        if (!line.trim()) return;
+        const eventValue: unknown = JSON.parse(line);
+        if (typeof eventValue !== "object" || eventValue === null || !("type" in eventValue)) {
+          throw new Error("The assistant returned an invalid progress event.");
+        }
+        if (
+          eventValue.type === "plan" &&
+          "steps" in eventValue &&
+          Array.isArray(eventValue.steps) &&
+          eventValue.steps.length === 3 &&
+          eventValue.steps.every((step): step is string => typeof step === "string")
+        ) {
+          workflowLabels.splice(0, workflowLabels.length, ...eventValue.steps);
+          hasWorkflowSteps = true;
+          return;
+        }
+        if (
+          eventValue.type === "progress" &&
+          "step" in eventValue &&
+          typeof eventValue.step === "string" &&
+          "message" in eventValue &&
+          typeof eventValue.message === "string"
+        ) {
+          const stepIndex = eventValue.step === "open" ? 0 : eventValue.step === "extract" ? 1 : 2;
+          const progressMessage = eventValue.message;
+          activeStepIndex = stepIndex;
+          if (hasWorkflowSteps) {
+            const positions = getWorkflowStepPositions(width, height, RESPONSE_HEIGHT);
+            setNodes((currentNodes) => {
+              const existingIndexes = new Set(
+                currentNodes
+                  .filter((node) => node.type === "workflowStep")
+                  .map((node) => Number(node.id.slice("workflow-step-".length)) - 1),
+              );
+              const updatedNodes = currentNodes.map((node) => {
+                if (!node.id.startsWith("workflow-step-") || !("label" in node.data)) return node;
+                const index = Number(node.id.slice("workflow-step-".length)) - 1;
+                return {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    label: index === stepIndex ? progressMessage : node.data.label,
+                    status: index < stepIndex ? "done" as const : index === stepIndex ? "active" as const : "pending" as const,
+                  },
+                };
+              });
+              const addedNodes: CanvasNode[] = workflowLabels
+                .slice(0, stepIndex + 1)
+                .flatMap((label, index) =>
+                  existingIndexes.has(index)
+                    ? []
+                    : [{
+                        id: `workflow-step-${index + 1}`,
+                        type: "workflowStep",
+                        position: positions[index],
+                        style: {
+                          width: Math.max(140, width - 32),
+                          height: WORKFLOW_STEP_HEIGHT,
+                        },
+                        draggable: true,
+                        deletable: false,
+                        selectable: true,
+                        connectable: false,
+                        data: {
+                          label: index === stepIndex ? progressMessage : label,
+                          status: index < stepIndex ? "done" : "active",
+                        },
+                      }],
+                );
+              return [...updatedNodes, ...addedNodes];
+            });
+
+            const edgeCount = Math.min(stepIndex + 1, workflowLabels.length);
+            setEdges([
+              ...Array.from({ length: Math.max(0, edgeCount - 1) }, (_, index) => ({
+                id: `workflow-edge-${index + 1}`,
+                source: `workflow-step-${index + 1}`,
+                target: `workflow-step-${index + 2}`,
+                sourceHandle: "workflow-output",
+                targetHandle: "workflow-input",
+                type: "smoothstep" as const,
+                animated: true,
+                style: { stroke: "#8069d6", strokeWidth: 1.5 },
+              })),
+              ...(edgeCount === workflowLabels.length ? [{
+                id: "workflow-to-response",
+                source: `workflow-step-${workflowLabels.length}`,
+                target: "assistant-response",
+                sourceHandle: "workflow-output",
+                targetHandle: "workflow-input",
+                type: "smoothstep" as const,
+                animated: true,
+                style: { stroke: "#8069d6", strokeWidth: 1.5 },
+              }] : []),
+            ]);
+          }
+          return;
+        }
+        if (eventValue.type === "done" && "result" in eventValue) {
+          result = eventValue.result;
+          activeStepIndex = hasWorkflowSteps ? workflowLabels.length - 1 : -1;
+          setNodes((currentNodes) =>
+            currentNodes.map((node) =>
+              node.id.startsWith("workflow-step-") && "label" in node.data
+                ? { ...node, data: { ...node.data, status: "done" as const } }
+                : node,
+            ),
+          );
+          return;
+        }
+        if (eventValue.type === "error" && "error" in eventValue && typeof eventValue.error === "string") {
+          throw new Error(eventValue.error);
+        }
+        throw new Error("The assistant returned an invalid progress event.");
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) processEvent(line);
+        if (done) break;
+      }
+      if (buffer.trim()) processEvent(buffer);
+      if (result === undefined) {
+        throw new Error("The assistant ended without returning a response.");
+      }
 
       if (
         typeof result !== "object" ||
@@ -499,12 +808,12 @@ export default function Home() {
           "error" in result &&
           typeof result.error === "string"
             ? result.error
-            : "The local model returned an invalid response.";
+            : "The assistant returned an invalid response.";
         throw new Error(errorMessage);
       }
 
       if (!apiResponse.ok) {
-        throw new Error("The local model could not complete that request. Please try again.");
+        throw new Error("The assistant could not complete that request. Please try again.");
       }
 
       const generatedText = result.text;
@@ -531,10 +840,14 @@ export default function Home() {
       chatHistoryRef.current = responseHistory;
       setChatHistory(responseHistory);
       const imageLayout = getImageLayout(width, height, images.length, RESPONSE_HEIGHT);
+      const responsePosition = getResponsePosition(width, height, RESPONSE_HEIGHT);
       const imageNodes: CanvasNode[] = images.map((image, index) => ({
         id: `response-image-${index + 1}`,
         type: "image",
-        position: imageLayout.images[index],
+        position: {
+          ...imageLayout.images[index],
+          y: imageLayout.images[index].y + responsePosition.y - imageLayout.response.y,
+        },
         style: { width: imageLayout.imageWidth, height: IMAGE_HEIGHT },
         data: { image },
       }));
@@ -546,7 +859,7 @@ export default function Home() {
             if (node.id === "assistant-response" && "prompt" in node.data) {
               return {
                 ...node,
-                position: imageLayout.response,
+                position: responsePosition,
                 style: { width: responseWidth, height: RESPONSE_HEIGHT },
                 data: {
                   ...node.data,
@@ -569,7 +882,30 @@ export default function Home() {
           })
           .concat(imageNodes),
       );
-      setEdges(images.map((_, index) => ({
+      setEdges([
+        ...(hasWorkflowSteps
+          ? workflowLabels.slice(1).map((_, index) => ({
+              id: `workflow-edge-${index + 1}`,
+              source: `workflow-step-${index + 1}`,
+              target: `workflow-step-${index + 2}`,
+              sourceHandle: "workflow-output",
+              targetHandle: "workflow-input",
+              type: "smoothstep" as const,
+              animated: false,
+              style: { stroke: "#8069d6", strokeWidth: 1.5 },
+            }))
+          : []),
+        ...(hasWorkflowSteps ? [{
+          id: "workflow-to-response",
+          source: `workflow-step-${workflowLabels.length}`,
+          target: "assistant-response",
+          sourceHandle: "workflow-output",
+          targetHandle: "workflow-input",
+          type: "smoothstep" as const,
+          animated: false,
+          style: { stroke: "#8069d6", strokeWidth: 1.5 },
+        }] : []),
+        ...images.map((_, index) => ({
         id: `response-to-image-${index + 1}`,
         source: "assistant-response",
         sourceHandle: "response-images",
@@ -577,10 +913,22 @@ export default function Home() {
         targetHandle: "image-source",
         type: "smoothstep",
         style: { stroke: "#8069d6", strokeWidth: 1.5 },
-      })));
+        })),
+      ]);
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Could not reach the local model. Please try again.";
+        error instanceof Error ? error.message : "Could not reach the assistant. Please try again.";
+      if (activeStepIndex >= 0) {
+        setNodes((currentNodes) =>
+          currentNodes.map((node) => {
+            if (!node.id.startsWith("workflow-step-") || !("label" in node.data)) return node;
+            const index = Number(node.id.slice("workflow-step-".length)) - 1;
+            return index === activeStepIndex
+              ? { ...node, data: { ...node.data, status: "error" as const } }
+              : node;
+          }),
+        );
+      }
       setNodes((currentNodes) =>
         currentNodes
           .filter((node) => node.type !== "image")
@@ -600,7 +948,9 @@ export default function Home() {
             return node;
           }),
       );
-      setEdges([]);
+      setEdges((currentEdges) =>
+        currentEdges.filter((edge) => edge.id.startsWith("workflow-")),
+      );
     }
   }, [setEdges, setNodes, showHistory, toggleResponseExpanded]);
 
@@ -616,7 +966,7 @@ export default function Home() {
 
       setNodes((currentNodes) => {
         const dockWidth = getDockWidth(width);
-        const dockPosition = getDockPosition(width, height, submitted.current);
+        const dockPosition = getDockPosition(width, height);
         const responseWidth = Math.min(RESPONSE_WIDTH, width - 32);
         const imageNodes = currentNodes.filter(
           (node): node is CanvasNode & { data: ImageNodeData } =>
@@ -630,6 +980,7 @@ export default function Home() {
           ? RESPONSE_EXPANDED_HEIGHT
           : RESPONSE_HEIGHT;
         const layout = getImageLayout(width, height, imageNodes.length, responseHeight);
+        const responsePosition = getResponsePosition(width, height, responseHeight);
 
         if (currentNodes.length === 0) {
           return [{
@@ -639,9 +990,13 @@ export default function Home() {
             style: { width: dockWidth, height: DOCK_HEIGHT },
             draggable: false,
             deletable: false,
-            selectable: true,
+            data: {
+              isLoading: false,
+              onSubmit: handleSubmit,
+              onClearContext: () => updateSelectedNodeContext(undefined),
+            },
+            selectable: false,
             connectable: false,
-            data: { isLoading: false, onSubmit: handleSubmit },
           }];
         }
 
@@ -656,7 +1011,7 @@ export default function Home() {
           if (node.id === "assistant-response") {
             return {
               ...node,
-              position: layout.response,
+              position: responsePosition,
               style: { width: responseWidth, height: responseHeight },
             };
           }
@@ -666,7 +1021,10 @@ export default function Home() {
             if (!position) return node;
             return {
               ...node,
-              position,
+              position: {
+                ...position,
+                y: position.y + responsePosition.y - layout.response.y,
+              },
               style: { width: layout.imageWidth, height: IMAGE_HEIGHT },
             };
           }
@@ -677,7 +1035,7 @@ export default function Home() {
 
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [handleSubmit, setNodes]);
+  }, [handleSubmit, setNodes, updateSelectedNodeContext]);
 
   return (
     <main className="flex h-screen min-h-[430px] w-full overflow-hidden bg-[#101116] font-sans text-[#e9e8ef]">
@@ -763,6 +1121,11 @@ export default function Home() {
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
+            onNodeClick={(_, node) => {
+              const context = getNodeContext(node);
+              if (context) updateSelectedNodeContext(context);
+            }}
+            onPaneClick={() => updateSelectedNodeContext(undefined)}
             nodesConnectable={false}
             minZoom={0.25}
             maxZoom={1.5}

@@ -1,17 +1,14 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
-## Local model setup
+## Groq setup
 
-Arc uses [Ollama](https://ollama.com) to generate chat responses on your computer. Install and start Ollama, then download a model such as `llama3.2` with `ollama pull llama3.2`. Start the app with `npm run dev` and open [http://localhost:3000](http://localhost:3000).
-
-By default, Arc connects to `http://127.0.0.1:11434` and uses `llama3.2:latest`. To choose a different Ollama server or installed model, set `OLLAMA_BASE_URL` and/or `OLLAMA_MODEL` in `.env.local`, then restart Next.js:
+Arc uses [Groq](https://groq.com) to generate chat responses. Add your Groq API key to `.env.local` in the project root, then start the app with `npm run dev` and open [http://localhost:3000](http://localhost:3000):
 
 ```env
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=dolphin-phi:latest
+GROQ_API_KEY=your_groq_api_key
 ```
 
-Chat generation runs locally. Conversation history is kept while the page is open and sent with follow-up prompts. When you ask for pictures, Arc searches Wikimedia Commons and displays matching, attributed image nodes; requests default to three results and can ask for up to ten. Image search needs an internet connection. Use the response node's **Chat history** button to review the conversation and **More** to expand a response.
+Keep the API key server-side; do not prefix it with `NEXT_PUBLIC_`. Restart Next.js after adding or changing the key. Conversation history is kept while the page is open and sent with follow-up prompts. When a message includes a public webpage URL, Arc fetches and extracts its readable HTML, shows the search/extraction/analysis steps on the canvas, then sends the page text to Groq to answer the question. Arc uses Groq structured output to determine whether a message asks for existing reference images; when it does, Arc searches Wikimedia Commons and displays matching, attributed image nodes. Requests default to three results and can ask for up to ten. Webpage and image search need an internet connection. Use the response node's **Chat history** button to review the conversation and **More** to expand a response.
 
 ## Getting Started
 
