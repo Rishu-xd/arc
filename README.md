@@ -10,6 +10,14 @@ GROQ_API_KEY=your_groq_api_key
 
 Keep the API key server-side; do not prefix it with `NEXT_PUBLIC_`. Restart Next.js after adding or changing the key. Conversation history is kept while the page is open and sent with follow-up prompts. When a message includes a public webpage URL, Arc fetches and extracts its readable HTML, shows the search/extraction/analysis steps on the canvas, then sends the page text to Groq to answer the question. Arc uses Groq structured output to determine whether a message asks for existing reference images; when it does, Arc searches Wikimedia Commons and displays matching, attributed image nodes. Requests default to three results and can ask for up to ten. Webpage and image search need an internet connection. Use the response node's **Chat history** button to review the conversation and **More** to expand a response.
 
+When a user asks Arc to scrape a public website or find current product information on a named site, Groq can call the server-side `scrape_website` tool in `scraping/website.ts`. It uses Puppeteer to inspect the provided site and its search form, then displays the site-specific workflow and a result card with the title, image, any listed price, description, and a link to the page. Scraped sites may limit automated access, and displayed prices can change. Install Puppeteer's Chrome browser if it is not already present:
+
+```bash
+npx puppeteer browsers install chrome
+```
+
+The result-card component lives in `ui/ScrapedResultNode.tsx`. The scraper accepts a requested public website URL or domain and blocks private-network destinations.
+
 ## Getting Started
 
 First, run the development server:
